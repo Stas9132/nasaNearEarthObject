@@ -5,20 +5,21 @@ import (
 	"fmt"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
-	"github.com/jinzhu/gorm"
-	_ "github.com/jinzhu/gorm/dialects/mysql"
-	"io/ioutil"
+	"github.com/peteretelej/nasa"
+	"gorm.io/driver/mysql"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+	"io"
 	"log"
 	"net/http"
-	"regexp"
-	"strings"
+	"strconv"
 	"time"
 )
 
 const url = ":3000"
 
 type service struct {
-	store map[string]string
+	store map[string]int
 	db    *gorm.DB
 }
 
@@ -34,12 +35,6 @@ func (s *service) getHandler(w http.ResponseWriter, r *http.Request) {
 
 	storeUpdateFlag := false
 	for _, date := range r.Form["dates"] {
-		rx := regexp.MustCompile("(?:20[0-4][0-9])-(?:1[0-2]|0[1-9])")
-		month := rx.FindString(date)
-		if len(month) == 0 {
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
 		_, ok := s.store[date]
 		if !ok {
 			c <- date
@@ -48,35 +43,47 @@ func (s *service) getHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if storeUpdateFlag {
-		time.Sleep(time.Second)
+		time.Sleep(10 * time.Second)
 	}
 
-	var response []string
+	var response int
 	w.WriteHeader(http.StatusOK)
 	for _, date := range r.Form["dates"] {
-		rx := regexp.MustCompile("(?:20[0-4][0-9])-(?:1[0-2]|0[1-9])")
-		month := rx.FindString(date)
-		e, ok := s.store[month]
-		response = append(response, e)
-		if !ok {
+		e, ok := s.store[date]
+		if ok {
+			response += e
+		} else {
 			w.WriteHeader(http.StatusPartialContent)
 		}
 	}
-	w.Write([]byte(strings.Join(response, " ")))
+	w.Write([]byte(strconv.Itoa(response)))
 	return
 }
 
-func (s *service) storeUpdateFunc() {
-	for reqMonth := range c {
-		_, ok := s.store[reqMonth]
+func (s *service) updateStoreFromNasa() {
+	nlc := make(chan *nasa.NeoList)
+	go func() {
+		for nl := range nlc {
+			for date, asteroids := range nl.NearEarthObjects {
+				s.store[date] = len(asteroids)
+			}
+		}
+	}()
+	for reqDate := range c {
+		_, ok := s.store[reqDate]
 		if !ok {
-			startTime, _ := time.Parse("2006-01-02", reqMonth+"-01")
-			startTime.da
-			endTime := startTime.AddDate(0, 1, -1)
+			startTime, err := time.Parse("2006-01-02", reqDate)
+			if err != nil {
+				continue
+			}
+			endTime := startTime.AddDate(0, 0, 0)
 
-			startDate := startTime.Format("2006-01-02")
-			endDate := endTime.Format("2006-01-02")
-			s.store[reqMonth] = startDate + "w" + endDate
+			go func(sT, eT time.Time) {
+				neoList, err := nasa.NeoFeed(startTime, endTime)
+				if err == nil {
+					nlc <- neoList
+				}
+			}(startTime, endTime)
 		}
 	}
 }
@@ -90,8 +97,10 @@ type NeoCount struct {
 	Count int    `json:"count"`
 }
 
+var sc = make(chan NeoCount, 10)
+
 func (s *service) postHandler(w http.ResponseWriter, r *http.Request) {
-	content, err := ioutil.ReadAll(r.Body)
+	content, err := io.ReadAll(r.Body)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		w.Write([]byte(err.Error()))
@@ -106,7 +115,7 @@ func (s *service) postHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, neoCountRecord := range t.Records {
-		s.db.Create(&neoCountRecord)
+		sc <- neoCountRecord
 	}
 
 	w.WriteHeader(http.StatusCreated)
@@ -114,18 +123,30 @@ func (s *service) postHandler(w http.ResponseWriter, r *http.Request) {
 	return
 }
 
+func statsUpload() {
+	dsn := "user:12345678@tcp(127.0.0.1:3306)/db1?charset=utf8mb4&parseTime=True&loc=Local"
+	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{})
+	if err != nil {
+		panic(err)
+	}
+	err = db.AutoMigrate(&NeoCount{})
+	if err != nil {
+		panic(err)
+	}
+	for neoCountRecord := range sc {
+		db.Clauses(clause.OnConflict{
+			UpdateAll: true,
+		}).Create(&neoCountRecord)
+	}
+}
+
 func main() {
 	fmt.Println("Сервис выводящий общее количество астероидов в околоземном пространстве на определённую дату")
 
-	srv := service{store: make(map[string]string)}
-	var err error
-	srv.db, err = gorm.Open("mysql", "user:12345678@tcp(127.0.0.1:3306)/db1?charset=utf8&parseTime=True")
-	if err != nil {
-		log.Fatal(err)
-	}
-	srv.db.AutoMigrate(&NeoCount{})
+	srv := service{store: make(map[string]int)}
 
-	go srv.storeUpdateFunc()
+	go srv.updateStoreFromNasa()
+	go statsUpload()
 
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
