@@ -16,11 +16,10 @@ import (
 	"time"
 )
 
-const url = ":3000"
+const serverUrl = ":3000"
 
 type service struct {
 	store map[string]int
-	db    *gorm.DB
 }
 
 var c = make(chan string, 10*10)
@@ -154,7 +153,7 @@ func main() {
 	r.Get("/neo/count", srv.getHandler)
 	r.Post("/neo/count", srv.postHandler)
 
-	if err := http.ListenAndServe(url, r); err != nil {
+	if err := http.ListenAndServe(serverUrl, r); err != nil {
 		log.Fatal(err)
 	}
 }

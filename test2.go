@@ -5,7 +5,7 @@ import (
 	"sort"
 )
 
-func main() {
+func main2() {
 	planet := make(map[int]string)
 
 	planet[10460] = "Датомир"
