@@ -1,0 +1,39 @@
+package main
+
+import (
+	"fmt"
+	"github.com/jinzhu/gorm"
+	_ "github.com/jinzhu/gorm/dialects/mysql"
+)
+
+type Booking struct {
+	Id      int    `json:”id”`
+	User    string `json:”user”`
+	Members int    `json:”members”`
+}
+
+type NeoCount struct {
+	Date  string `gorm:"primary_key"`
+	Count int    `json:"count"`
+}
+
+func main() {
+	fmt.Println()
+	db, err := gorm.Open("mysql", "user:12345678@tcp(127.0.0.1:3306)/db1?charset=utf8&parseTime=True")
+	if err != nil {
+		panic(err)
+	}
+	db.AutoMigrate(&NeoCount{})
+	//b := Booking{
+	//	Id:      0,
+	//	User:    "0",
+	//	Members: 0,
+	//}
+	b := NeoCount{
+		Date:  "14",
+		Count: 14,
+	}
+
+	fmt.Println(db.NewRecord(b))
+	db.Create(&b)
+}
